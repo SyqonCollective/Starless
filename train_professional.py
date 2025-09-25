@@ -376,6 +376,7 @@ class ProfessionalTrainer:
             is_best = val_metrics['val_loss'] < best_val_loss
             if is_best:
                 best_val_loss = val_metrics['val_loss']
+                self.best_val_loss = best_val_loss  # Update instance variable!
                 patience_counter = 0
                 
                 # Save checkpoint
@@ -395,6 +396,22 @@ class ProfessionalTrainer:
                 self.logger.info(f"🎯 Best model saved: {best_val_loss:.6f}")
             else:
                 patience_counter += 1
+            
+            # Save regular checkpoint every 5 epochs
+            if (epoch + 1) % 5 == 0:
+                regular_checkpoint_path = os.path.join(self.config['checkpoint_dir'], f'checkpoint_epoch_{epoch+1:03d}.pth')
+                save_checkpoint({
+                    'epoch': epoch + 1,
+                    'state_dict': self.model.state_dict(),
+                    'optimizer': self.optimizer.state_dict(),
+                    'scheduler': self.scheduler.state_dict(),
+                    'scaler': self.scaler.state_dict(),
+                    'best_val_loss': self.best_val_loss,
+                    'config': self.config,
+                    'train_metrics': train_metrics,
+                    'val_metrics': val_metrics
+                }, regular_checkpoint_path, is_best=False)
+                print(f"💾 Regular checkpoint saved: epoch {epoch+1}")
             
             # Early stopping
             if patience_counter >= patience:

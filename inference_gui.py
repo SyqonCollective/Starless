@@ -345,96 +345,51 @@ class StarRemovalGUI:
                 raise Exception(f"Both OpenCV and PIL failed: {e}, {e2}")
     
     def process_with_tiles(self, image):
-        """Processa immagine con tile overlap professionale"""
-        tile_size = self.tile_size.get()
-        overlap = self.overlap.get()
-        
+        """USA IL FORWARD_CHOP FIXATO DEL MODELLO invece del tiling manuale"""
         h, w, c = image.shape
-        stride = tile_size - overlap
+        print(f"🔧 Using MODEL forward_chop (FIXED) for {h}x{w} image")
         
-        # Calcola numero di tile
-        n_tiles_h = (h - overlap + stride - 1) // stride
-        n_tiles_w = (w - overlap + stride - 1) // stride
+        # Setup progress indeterminata per il processing del modello
+        self.progress.config(mode='indeterminate')
+        self.tile_progress.config(mode='indeterminate')
+        self.progress.start(10)
+        self.tile_progress.start(15)
         
-        # Pad image se necessario
-        pad_h = n_tiles_h * stride + overlap - h
-        pad_w = n_tiles_w * stride + overlap - w
-        
-        if pad_h > 0 or pad_w > 0:
-            image = np.pad(image, ((0, max(0, pad_h)), (0, max(0, pad_w)), (0, 0)), mode='reflect')
-        
-        # Result image
-        result = np.zeros_like(image)
-        weight_map = np.zeros(image.shape[:2])
-        
-        total_tiles = n_tiles_h * n_tiles_w
-        current_tile = 0
-        
-        # Setup progress bars
-        self.progress.config(maximum=100)
-        self.tile_progress.config(maximum=total_tiles)
+        self.status_label.config(text="Processing with fixed model inference...", foreground="orange")
+        self.tile_status_label.config(text="Using forward_chop with bilinear blending")
+        self.root.update()
         
         with torch.no_grad():
-            for i in range(n_tiles_h):
-                for j in range(n_tiles_w):
-                    current_tile += 1
-                    
-                    # Update progress bars
-                    tile_progress = (current_tile / total_tiles) * 100
-                    self.progress.config(value=tile_progress)
-                    self.tile_progress.config(value=current_tile)
-                    
-                    # Update status labels
-                    self.status_label.config(text=f"Processing tiles... {tile_progress:.1f}%", foreground="orange")
-                    self.tile_status_label.config(text=f"Tile {current_tile}/{total_tiles}")
-                    self.root.update()
-                    
-                    # Extract tile
-                    y1 = i * stride
-                    y2 = y1 + tile_size
-                    x1 = j * stride
-                    x2 = x1 + tile_size
-                    
-                    tile = image[y1:y2, x1:x2]
-                    
-                    # Preprocess tile
-                    tile_tensor = torch.from_numpy(tile).permute(2, 0, 1).unsqueeze(0).to(self.device)
-                    tile_tensor = (tile_tensor - 0.5) / 0.5  # Normalize [-1, 1]
-                    
-                    # Inference with proper device acceleration
-                    if self.device.type == 'cuda':
-                        with torch.cuda.amp.autocast():
-                            output = self.model(tile_tensor)
-                    else:
-                        # For MPS (Metal) and CPU
-                        output = self.model(tile_tensor)
-                    
-                    # Postprocess
-                    output = (output * 0.5 + 0.5).clamp(0, 1)  # Denormalize
-                    processed_tile = output.squeeze(0).permute(1, 2, 0).cpu().numpy()
-                    
-                    # Weight for blending (higher weight in center)
-                    weight = np.ones((tile_size, tile_size))
-                    if overlap > 0:
-                        # Create smooth weight mask
-                        fade = overlap // 2
-                        for k in range(fade):
-                            alpha = k / fade
-                            weight[k, :] *= alpha
-                            weight[-k-1, :] *= alpha
-                            weight[:, k] *= alpha
-                            weight[:, -k-1] *= alpha
-                    
-                    # Add to result
-                    result[y1:y2, x1:x2] += processed_tile * weight[:, :, np.newaxis]
-                    weight_map[y1:y2, x1:x2] += weight
+            # Converti a tensor
+            image_tensor = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0).to(self.device)
+            
+            # Normalizza correttamente
+            image_tensor = (image_tensor - 0.5) / 0.5  # [-1, 1]
+            
+            print(f"📐 Input tensor: {image_tensor.shape}, range: [{image_tensor.min():.3f}, {image_tensor.max():.3f}]")
+            
+            # Usa il forward_chop FIXATO del modello
+            if self.device.type == 'cuda':
+                with torch.cuda.amp.autocast():
+                    output = self.model(image_tensor)
+            else:
+                output = self.model(image_tensor)
+            
+            print(f"📐 Output tensor: {output.shape}, range: [{output.min():.3f}, {output.max():.3f}]")
+            
+            # Denormalizza correttamente
+            output = (output * 0.5 + 0.5).clamp(0, 1)
+            
+            print(f"📐 Denormalized: range: [{output.min():.3f}, {output.max():.3f}]")
+            
+            # Converti a numpy
+            result = output.squeeze(0).permute(1, 2, 0).cpu().numpy()
         
-        # Normalize by weight
-        weight_map[weight_map == 0] = 1
-        result = result / weight_map[:, :, np.newaxis]
-        
-        # Crop to original size
-        result = result[:h, :w]
+        # Stop progress bars
+        self.progress.stop()
+        self.tile_progress.stop()
+        self.progress.config(mode='determinate', value=100)
+        self.tile_progress.config(mode='determinate', value=1, maximum=1)
         
         return result
     
