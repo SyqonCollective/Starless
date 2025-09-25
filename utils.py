@@ -68,10 +68,22 @@ def setup_logging(log_dir: str, log_level=logging.INFO):
 
 def save_checkpoint(state: Dict[str, Any], filename: str, is_best: bool = False):
     """Save training checkpoint"""
-    torch.save(state, filename)
-    if is_best:
-        best_filename = filename.replace('.pth', '_best.pth')
-        torch.save(state, best_filename)
+    try:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        
+        # Save checkpoint
+        torch.save(state, filename)
+        print(f"✅ Checkpoint saved: {filename}")
+        
+        if is_best:
+            best_filename = filename.replace('.pth', '_best.pth')
+            torch.save(state, best_filename)
+            print(f"🎯 Best model saved: {best_filename}")
+            
+    except Exception as e:
+        print(f"❌ Error saving checkpoint: {e}")
+        raise
 
 
 def load_checkpoint(filename: str, model, optimizer=None, scheduler=None):

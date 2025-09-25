@@ -113,8 +113,48 @@ class ProfessionalTrainer:
         self.nan_count = 0
         self.skip_count = 0
         
+        # Resume from checkpoint if requested
+        self.start_epoch = 0
+        self.best_val_loss = float('inf')
+        
+        # Check for resume checkpoint from environment
+        resume_checkpoint = os.environ.get('RESUME_CHECKPOINT')
+        if resume_checkpoint and os.path.exists(resume_checkpoint):
+            self.load_checkpoint(resume_checkpoint)
+        
         self.logger.info("🚀 Professional trainer initialized")
         self.logger.info(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
+        
+    def load_checkpoint(self, checkpoint_path):
+        """Load checkpoint for resuming training"""
+        try:
+            self.logger.info(f"🔄 Loading checkpoint: {checkpoint_path}")
+            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            
+            # Load model state
+            self.model.load_state_dict(checkpoint['state_dict'])
+            
+            # Load optimizer state
+            if 'optimizer' in checkpoint:
+                self.optimizer.load_state_dict(checkpoint['optimizer'])
+            
+            # Load scheduler state
+            if 'scheduler' in checkpoint:
+                self.scheduler.load_state_dict(checkpoint['scheduler'])
+            
+            # Load scaler state
+            if 'scaler' in checkpoint:
+                self.scaler.load_state_dict(checkpoint['scaler'])
+            
+            # Load training state
+            self.start_epoch = checkpoint.get('epoch', 0)
+            self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+            
+            self.logger.info(f"✅ Resumed from epoch {self.start_epoch}, best loss: {self.best_val_loss:.6f}")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to load checkpoint: {e}")
+            raise
         
     def validate_tensors(self, *tensors, names=None):
         """Validazione professionale dei tensori"""
@@ -293,13 +333,16 @@ class ProfessionalTrainer:
     
     def train(self, train_loader, val_loader, num_epochs):
         """Training loop professionale"""
-        self.logger.info(f"Starting professional training for {num_epochs} epochs")
+        if self.start_epoch > 0:
+            self.logger.info(f"Resuming training from epoch {self.start_epoch} for {num_epochs} total epochs")
+        else:
+            self.logger.info(f"Starting professional training for {num_epochs} epochs")
         
-        best_val_loss = float('inf')
+        best_val_loss = self.best_val_loss
         patience_counter = 0
         patience = self.config.get('patience', 20)
         
-        for epoch in range(num_epochs):
+        for epoch in range(self.start_epoch, num_epochs):
             epoch_start = time.time()
             
             # Training
@@ -335,6 +378,8 @@ class ProfessionalTrainer:
                 best_val_loss = val_metrics['val_loss']
                 patience_counter = 0
                 
+                # Save checkpoint
+                checkpoint_path = os.path.join(self.config['checkpoint_dir'], f'checkpoint_epoch_{epoch+1:03d}.pth')
                 save_checkpoint({
                     'epoch': epoch + 1,
                     'state_dict': self.model.state_dict(),
@@ -345,7 +390,7 @@ class ProfessionalTrainer:
                     'config': self.config,
                     'train_metrics': train_metrics,
                     'val_metrics': val_metrics
-                }, is_best, self.config['checkpoint_dir'])
+                }, checkpoint_path, is_best=True)
                 
                 self.logger.info(f"🎯 Best model saved: {best_val_loss:.6f}")
             else:
