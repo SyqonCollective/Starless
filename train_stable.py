@@ -357,8 +357,8 @@ def main():
     
     # Configuration ultra-stabile
     config = {
-        'train_dir': '/Users/michaelruggeri/Desktop/StarLess/train_tiles',
-        'val_dir': '/Users/michaelruggeri/Desktop/StarLess/val_tiles', 
+        'train_dir': '/workspace/train_tiles',
+        'val_dir': '/workspace/val_tiles', 
         'batch_size': 4,  # Molto ridotto per stabilità
         'num_workers': 2,  # Ridotto
         'epochs': 100,

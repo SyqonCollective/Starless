@@ -38,18 +38,18 @@ fi
 # Verifica dataset
 echo ""
 echo "📁 Controllo dataset..."
-if [ ! -d "./train_tiles/input" ]; then
-    echo "❌ Training dataset not found at ./train_tiles/input"
+if [ ! -d "/workspace/train_tiles/input" ]; then
+    echo "❌ Training dataset not found at /workspace/train_tiles/input"
     exit 1
 fi
 
-if [ ! -d "./train_tiles/target" ]; then
-    echo "❌ Training targets not found at ./train_tiles/target"
+if [ ! -d "/workspace/train_tiles/target" ]; then
+    echo "❌ Training targets not found at /workspace/train_tiles/target"
     exit 1
 fi
 
-TRAIN_INPUT_COUNT=$(find ./train_tiles/input -name "*.png" | wc -l)
-TRAIN_TARGET_COUNT=$(find ./train_tiles/target -name "*.png" | wc -l)
+TRAIN_INPUT_COUNT=$(find /workspace/train_tiles/input -name "*.png" | wc -l)
+TRAIN_TARGET_COUNT=$(find /workspace/train_tiles/target -name "*.png" | wc -l)
 
 echo "📊 Training images: $TRAIN_INPUT_COUNT input, $TRAIN_TARGET_COUNT target"
 
@@ -63,9 +63,9 @@ if [ $TRAIN_INPUT_COUNT -ne $TRAIN_TARGET_COUNT ]; then
 fi
 
 # Verifica val dataset (opzionale)
-if [ -d "./val_tiles/input" ] && [ -d "./val_tiles/target" ]; then
-    VAL_INPUT_COUNT=$(find ./val_tiles/input -name "*.png" | wc -l)
-    VAL_TARGET_COUNT=$(find ./val_tiles/target -name "*.png" | wc -l)
+if [ -d "/workspace/val_tiles/input" ] && [ -d "/workspace/val_tiles/target" ]; then
+    VAL_INPUT_COUNT=$(find /workspace/val_tiles/input -name "*.png" | wc -l)
+    VAL_TARGET_COUNT=$(find /workspace/val_tiles/target -name "*.png" | wc -l)
     echo "📊 Validation images: $VAL_INPUT_COUNT input, $VAL_TARGET_COUNT target"
 else
     echo "ℹ️  Validation dataset not found - will split training set"
