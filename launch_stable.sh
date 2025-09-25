@@ -12,6 +12,7 @@ echo "============================================================"
 echo "🔍 Controllo configurazione GPU..."
 python -c "
 import torch
+import sys
 print(f'CUDA available: {torch.cuda.is_available()}')
 if torch.cuda.is_available():
     print(f'GPU: {torch.cuda.get_device_name(0)}')
@@ -26,7 +27,7 @@ if torch.cuda.is_available():
     print('✅ GPU test passed')
 else:
     print('❌ CUDA not available!')
-    exit 1
+    sys.exit(1)
 "
 
 if [ $? -ne 0 ]; then
@@ -97,6 +98,7 @@ echo ""
 echo "🧪 Test rapido architettura modello..."
 python -c "
 import torch
+import sys
 from model import create_astro_model
 
 try:
@@ -119,7 +121,7 @@ try:
     
 except Exception as e:
     print(f'❌ Model test failed: {e}')
-    exit(1)
+    sys.exit(1)
 "
 
 if [ $? -ne 0 ]; then
