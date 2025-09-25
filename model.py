@@ -275,85 +275,99 @@ class NAFNetLocal(NAFNet):
         
         self.train_size = train_size
 
+    def forward_base(self, inp):
+        """Forward base senza chunking - per uso interno"""
+        return super().forward(inp)
+    
     def forward(self, inp):
         # Durante il training usa l'implementazione standard
         if self.training:
-            return super().forward(inp)
+            return self.forward_base(inp)
         
         # Durante l'inferenza può gestire immagini più grandi
         return self.forward_chop(inp)
 
-    def _hann2d(self, h, w, device):
-        """Crea finestra Hann 2D per blending smooth"""
-        wy = torch.hann_window(h, periodic=False, device=device).unsqueeze(1)
-        wx = torch.hann_window(w, periodic=False, device=device).unsqueeze(0)
-        return (wy @ wx).clamp_min(1e-6)  # evita divisioni per ~0
-
-    @torch.no_grad()
-    def forward_chop(self, inp, tile=512, overlap=64):
+    def forward_chop(self, inp, shave=64, min_size=160000):
         """
-        Sliding-window con blending per immagini grandi.
-        RISOLVE I QUADRETTINI NERI con smooth blending!
-        
-        Args:
-            inp: input tensor [B, C, H, W]
-            tile: dimensione della finestra (512 default)
-            overlap: sovrapposizione per blending (64 default, molto sicuro)
+        Forward con chunking MIGLIORATO - overlap maggiore per evitare quadrettini
+        shave=64 per copertura adeguata del receptive field
         """
-        self.eval()
-        b, c, H, W = inp.shape
-        device = inp.device
-
-        out = torch.zeros_like(inp)
-        norm = torch.zeros_like(inp)  # somma dei pesi per normalizzare
-
-        step = tile - overlap
+        scale = 1
+        n_GPUs = 1
+        b, c, h, w = inp.size()
+        h_half, w_half = h // 2, w // 2
+        h_size, w_size = h_half + shave, w_half + shave
         
-        # Pad riflessivo per coprire i bordi senza introdurre bande
-        pad_h = (step - (H - tile) % step) % step if H > tile else 0
-        pad_w = (step - (W - tile) % step) % step if W > tile else 0
-        
-        if pad_h > 0 or pad_w > 0:
-            x = F.pad(inp, (0, pad_w, 0, pad_h), mode='reflect')
+        lr_list = [
+            inp[:, :, 0:h_size, 0:w_size],
+            inp[:, :, 0:h_size, (w - w_size):w],
+            inp[:, :, (h - h_size):h, 0:w_size],
+            inp[:, :, (h - h_size):h, (w - w_size):w]
+        ]
+
+        if w_size * h_size < min_size:
+            sr_list = []
+            for i in range(0, 4, n_GPUs):
+                lr_batch = torch.cat(lr_list[i:(i + n_GPUs)], dim=0)
+                sr_batch = self.forward_base(lr_batch)
+                sr_list.extend(sr_batch.chunk(n_GPUs, dim=0))
         else:
-            x = inp
+            sr_list = [
+                self.forward_chop(patch, shave=shave, min_size=min_size)
+                for patch in lr_list
+            ]
 
-        _, _, Hp, Wp = x.shape
+        h, w = scale * h, scale * w
+        h_half, w_half = scale * h_half, scale * w_half
+        h_size, w_size = scale * h_size, scale * w_size
+        shave *= scale
+
+        # BLENDING nelle zone di overlap invece di hard stitching
+        output = inp.new_zeros(b, c, h, w)
         
-        # Finestra Hann per blending smooth
-        window = self._hann2d(tile, tile, device).view(1, 1, tile, tile)
-
-        # Sliding window con overlap
-        for y in range(0, max(1, Hp - tile + 1), step):
-            y_end = min(y + tile, Hp)
-            y = max(0, y_end - tile)  # Aggiusta per bordi
-            
-            for x_pos in range(0, max(1, Wp - tile + 1), step):
-                x_end = min(x_pos + tile, Wp)
-                x_pos = max(0, x_end - tile)  # Aggiusta per bordi
-                
-                # Estrai patch
-                patch = x[:, :, y:y+tile, x_pos:x_pos+tile]
-                
-                # Forward pass standard del modello
-                pred = super(NAFNetLocal, self).forward(patch)
-                
-                # Accumula con blending window
-                current_window = window
-                if pred.shape[-2:] != (tile, tile):
-                    # Aggiusta window per patch ai bordi
-                    h_patch, w_patch = pred.shape[-2:]
-                    current_window = self._hann2d(h_patch, w_patch, device).view(1, 1, h_patch, w_patch)
-                
-                out[:, :, y:y+pred.shape[-2], x_pos:x_pos+pred.shape[-1]] += pred * current_window
-                norm[:, :, y:y+pred.shape[-2], x_pos:x_pos+pred.shape[-1]] += current_window
-
-        # Normalizzazione finale
-        out = out / norm.clamp_min(1e-6)
+        # Quadrante 1 (top-left) - copia completo
+        output[:, :, 0:h_half, 0:w_half] = sr_list[0][:, :, 0:h_half, 0:w_half]
         
-        # Rimuovi il padding e ritorna alla dimensione originale
-        out = out[:, :, :H, :W]
-        return out
+        # Quadrante 2 (top-right) - blend orizzontale
+        overlap_w = w_size - w + w_half
+        for i in range(overlap_w):
+            alpha = i / overlap_w
+            output[:, :, 0:h_half, w_half + i] = (
+                (1 - alpha) * sr_list[0][:, :, 0:h_half, w_half + i] +
+                alpha * sr_list[1][:, :, 0:h_half, (w_size - w + w_half) + i]
+            )
+        output[:, :, 0:h_half, w_half + overlap_w:w] = sr_list[1][:, :, 0:h_half, (w_size - w + w_half) + overlap_w:w_size]
+        
+        # Quadrante 3 (bottom-left) - blend verticale  
+        overlap_h = h_size - h + h_half
+        for i in range(overlap_h):
+            alpha = i / overlap_h
+            output[:, :, h_half + i, 0:w_half] = (
+                (1 - alpha) * sr_list[0][:, :, h_half + i, 0:w_half] +
+                alpha * sr_list[2][:, :, (h_size - h + h_half) + i, 0:w_half]
+            )
+        output[:, :, h_half + overlap_h:h, 0:w_half] = sr_list[2][:, :, (h_size - h + h_half) + overlap_h:h_size, 0:w_half]
+        
+        # Quadrante 4 (bottom-right) - blend sia orizzontale che verticale
+        for i in range(overlap_h):
+            for j in range(overlap_w):
+                alpha_h = i / overlap_h
+                alpha_w = j / overlap_w
+                
+                # Interpolazione bilineare dei 4 valori
+                v1 = sr_list[0][:, :, h_half + i, w_half + j]  # top-left
+                v2 = sr_list[1][:, :, h_half + i, (w_size - w + w_half) + j]  # top-right  
+                v3 = sr_list[2][:, :, (h_size - h + h_half) + i, w_half + j]  # bottom-left
+                v4 = sr_list[3][:, :, (h_size - h + h_half) + i, (w_size - w + w_half) + j]  # bottom-right
+                
+                output[:, :, h_half + i, w_half + j] = (
+                    (1 - alpha_h) * (1 - alpha_w) * v1 +
+                    (1 - alpha_h) * alpha_w * v2 +
+                    alpha_h * (1 - alpha_w) * v3 +
+                    alpha_h * alpha_w * v4
+                )
+
+        return output
 
 
 def create_model(model_type='nafnet', **kwargs):
