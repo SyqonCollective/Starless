@@ -41,13 +41,17 @@ class EdgeLoss(nn.Module):
             pred_gray = pred
             target_gray = target
         
+        # Assicurati che i kernel Sobel siano dello stesso tipo dei tensori input
+        sobel_x = self.sobel_x.to(pred_gray.dtype)
+        sobel_y = self.sobel_y.to(pred_gray.dtype)
+        
         # Calcola gradienti
-        pred_edge_x = F.conv2d(pred_gray, self.sobel_x, padding=1)
-        pred_edge_y = F.conv2d(pred_gray, self.sobel_y, padding=1)
+        pred_edge_x = F.conv2d(pred_gray, sobel_x, padding=1)
+        pred_edge_y = F.conv2d(pred_gray, sobel_y, padding=1)
         pred_edge = torch.sqrt(pred_edge_x ** 2 + pred_edge_y ** 2 + 1e-6)
         
-        target_edge_x = F.conv2d(target_gray, self.sobel_x, padding=1)
-        target_edge_y = F.conv2d(target_gray, self.sobel_y, padding=1)
+        target_edge_x = F.conv2d(target_gray, sobel_x, padding=1)
+        target_edge_y = F.conv2d(target_gray, sobel_y, padding=1)
         target_edge = torch.sqrt(target_edge_x ** 2 + target_edge_y ** 2 + 1e-6)
         
         # L1 loss sui gradienti
