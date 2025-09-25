@@ -220,6 +220,11 @@ class AstroLoss(nn.Module):
             losses['star_preservation'] = star_pres
             total_loss += self.star_preservation_weight * star_pres
         
+        # Check for NaN/Inf in total loss
+        if torch.isnan(total_loss) or torch.isinf(total_loss):
+            # Return a safe fallback loss
+            total_loss = torch.tensor(1.0, device=pred.device, requires_grad=True)
+            
         losses['total'] = total_loss
         return losses
 

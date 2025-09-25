@@ -44,8 +44,12 @@ class AstroTrainer:
         self.setup_optimizer()
         self.setup_scheduler()
         
-        # Mixed precision training
+        # Mixed precision training con gestione NaN
         self.scaler = GradScaler(enabled=config['use_amp'])
+        
+        # Flag per monitoraggio NaN
+        self.nan_count = 0
+        self.max_nan_tolerance = 3
         
         # Data loaders
         self.setup_data()
@@ -177,9 +181,32 @@ class AstroTrainer:
                 loss_dict = self.criterion(pred_imgs, target_imgs, input_imgs)
                 loss = loss_dict['total']
             
+            # Check for NaN in loss
+            if torch.isnan(loss) or torch.isinf(loss):
+                self.nan_count += 1
+                self.logger.warning(f"NaN/Inf detected in loss: {loss.item()}, count: {self.nan_count}")
+                
+                if self.nan_count >= self.max_nan_tolerance:
+                    self.logger.error("Too many NaN/Inf losses, reducing learning rate by 10x")
+                    for param_group in self.optimizer.param_groups:
+                        param_group['lr'] *= 0.1
+                    self.nan_count = 0
+                continue  # Skip this batch
+            
             # Backward pass
             self.optimizer.zero_grad(set_to_none=True)
             self.scaler.scale(loss).backward()
+            
+            # Check for NaN in gradients
+            nan_grads = False
+            for name, param in self.model.named_parameters():
+                if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
+                    self.logger.warning(f"NaN/Inf gradients in {name}")
+                    nan_grads = True
+            
+            if nan_grads:
+                self.logger.warning("Skipping step due to NaN gradients")
+                continue
             
             # Gradient clipping
             if self.config['grad_clip'] > 0:
@@ -261,11 +288,20 @@ class AstroTrainer:
         return losses.avg, psnr_meter.avg
 
     def calculate_psnr(self, pred, target, max_val=2.0):
-        """Calcola PSNR per immagini in range [-1, 1]"""
+        """Calcola PSNR per immagini in range [-1, 1] con stabilità numerica"""
         mse = torch.mean((pred - target) ** 2)
-        if mse == 0:
-            return torch.tensor(float('inf'))
-        return 20 * torch.log10(max_val / torch.sqrt(mse))
+        mse = torch.clamp(mse, min=1e-8)  # Evita divisione per zero
+        
+        # Check for NaN/Inf
+        if torch.isnan(mse) or torch.isinf(mse):
+            return torch.tensor(0.0, device=pred.device)
+            
+        psnr = 20 * torch.log10(max_val / torch.sqrt(mse))
+        
+        # Clamp PSNR to reasonable range
+        psnr = torch.clamp(psnr, min=0.0, max=50.0)
+        
+        return psnr
 
     def save_sample_images(self, input_imgs, pred_imgs, target_imgs, epoch):
         """Salva immagini di esempio"""
@@ -390,7 +426,7 @@ def get_default_config():
         # Training
         'num_epochs': 300,
         'batch_size': 8,  # Ottimizzato per RTX 5090 con mixed precision completo
-        'learning_rate': 2e-4,
+        'learning_rate': 1e-4,  # Ridotto per stabilità
         'weight_decay': 1e-4,
         'optimizer': 'adamw',
         'scheduler': 'cosine',
