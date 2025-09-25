@@ -39,7 +39,7 @@ class StarRemovalGUI:
         self.checkpoint_path = tk.StringVar()
         self.image_path = tk.StringVar()
         self.tile_size = tk.IntVar(value=512)
-        self.overlap = tk.IntVar(value=96)
+        self.overlap = tk.IntVar(value=64)
         self.processing = False
         
         self.setup_gui()
@@ -91,9 +91,8 @@ class StarRemovalGUI:
         tile_combo.grid(row=0, column=1, padx=(10, 20))
         
         ttk.Label(params_frame, text="Overlap:").grid(row=0, column=2, sticky=tk.W)
-        overlap_combo = ttk.Combobox(params_frame, textvariable=self.overlap, values=[32, 64, 96, 128], width=10)
+        overlap_combo = ttk.Combobox(params_frame, textvariable=self.overlap, values=[32, 64, 128], width=10)
         overlap_combo.grid(row=0, column=3, padx=(10, 20))
-        overlap_combo.set(96)  # Default overlap più alto per astrofotografia
         
         # Process button
         self.process_btn = ttk.Button(params_frame, text="🚀 Process Image", command=self.process_image)
@@ -270,6 +269,12 @@ class StarRemovalGUI:
             image_path = self.image_path.get()
             original_img = self.load_image_for_inference(image_path)
             
+            # Validazione canali
+            if len(original_img.shape) != 3 or original_img.shape[2] != 3:
+                raise Exception(f"Expected RGB image [H,W,3], got shape: {original_img.shape}")
+            
+            print(f"📐 Image loaded: {original_img.shape[1]}x{original_img.shape[0]} RGB")
+            
             self.status_label.config(text="Processing tiles...", foreground="orange")
             self.root.update()
             
@@ -300,7 +305,7 @@ class StarRemovalGUI:
             self.tile_status_label.config(text="")
     
     def load_image_for_inference(self, image_path):
-        """Carica immagine per inferenza"""
+        """Carica immagine per inferenza con gestione canali"""
         # Prova con OpenCV prima
         try:
             if image_path.lower().endswith(('.tiff', '.tif')):
@@ -313,17 +318,31 @@ class StarRemovalGUI:
                 img = cv2.imread(image_path, cv2.IMREAD_COLOR)
                 img = img.astype(np.float32) / 255.0
             
-            # BGR to RGB
-            if len(img.shape) == 3 and img.shape[2] == 3:
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            # Gestione canali
+            if len(img.shape) == 3:
+                if img.shape[2] == 4:  # RGBA -> RGB
+                    img = img[:, :, :3]  # Rimuovi canale alpha
+                    print("📷 Converted RGBA to RGB")
+                elif img.shape[2] == 3:  # BGR -> RGB
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            elif len(img.shape) == 2:  # Grayscale -> RGB
+                img = np.stack([img, img, img], axis=2)
+                print("📷 Converted Grayscale to RGB")
             
             return img
             
-        except:
+        except Exception as e:
+            print(f"⚠️ OpenCV failed: {e}, trying PIL...")
             # Fallback con PIL
-            with Image.open(image_path) as pil_img:
-                img = np.array(pil_img.convert('RGB')).astype(np.float32) / 255.0
-            return img
+            try:
+                with Image.open(image_path) as pil_img:
+                    # Forza conversione a RGB (gestisce RGBA, P, L, etc.)
+                    rgb_img = pil_img.convert('RGB')
+                    img = np.array(rgb_img).astype(np.float32) / 255.0
+                    print(f"📷 PIL: Converted {pil_img.mode} to RGB")
+                return img
+            except Exception as e2:
+                raise Exception(f"Both OpenCV and PIL failed: {e}, {e2}")
     
     def process_with_tiles(self, image):
         """Processa immagine con tile overlap professionale"""
@@ -394,37 +413,17 @@ class StarRemovalGUI:
                     output = (output * 0.5 + 0.5).clamp(0, 1)  # Denormalize
                     processed_tile = output.squeeze(0).permute(1, 2, 0).cpu().numpy()
                     
-                    # Advanced weight for smooth blending (Gaussian-like)
+                    # Weight for blending (higher weight in center)
                     weight = np.ones((tile_size, tile_size))
                     if overlap > 0:
-                        # Create smooth Gaussian-like weight mask
-                        fade = overlap
-                        
-                        # Create 1D weight profile (smooth falloff)
-                        x = np.linspace(0, 1, fade)
-                        smooth_profile = 0.5 * (1 + np.cos(np.pi * x))  # Cosine falloff
-                        
-                        # Apply to edges
-                        if fade > 0:
-                            # Top edge
-                            for k in range(fade):
-                                if k < len(smooth_profile):
-                                    weight[k, :] *= smooth_profile[k]
-                            
-                            # Bottom edge
-                            for k in range(fade):
-                                if k < len(smooth_profile):
-                                    weight[-(k+1), :] *= smooth_profile[k]
-                            
-                            # Left edge  
-                            for k in range(fade):
-                                if k < len(smooth_profile):
-                                    weight[:, k] *= smooth_profile[k]
-                            
-                            # Right edge
-                            for k in range(fade):
-                                if k < len(smooth_profile):
-                                    weight[:, -(k+1)] *= smooth_profile[k]
+                        # Create smooth weight mask
+                        fade = overlap // 2
+                        for k in range(fade):
+                            alpha = k / fade
+                            weight[k, :] *= alpha
+                            weight[-k-1, :] *= alpha
+                            weight[:, k] *= alpha
+                            weight[:, -k-1] *= alpha
                     
                     # Add to result
                     result[y1:y2, x1:x2] += processed_tile * weight[:, :, np.newaxis]
@@ -437,82 +436,7 @@ class StarRemovalGUI:
         # Crop to original size
         result = result[:h, :w]
         
-        # Post-processing per rimuovere artifacts
-        result = self.post_process_result(result, image)
-        
         return result
-    
-    def post_process_result(self, result, original):
-        """Post-processing per correggere artifacts e migliorare texture"""
-        try:
-            # Ensure same shape
-            if result.shape != original.shape:
-                return result
-            
-            # 1. Correzione valori estremi (quadrettini neri)
-            # Identifica pixel troppo scuri rispetto al vicinato
-            from scipy import ndimage
-            
-            # Convert to grayscale for analysis
-            if len(result.shape) == 3:
-                gray_result = np.mean(result, axis=2)
-                gray_original = np.mean(original, axis=2)
-            else:
-                gray_result = result
-                gray_original = original
-            
-            # Trova regioni troppo scure (possibili artifacts)
-            local_mean = ndimage.uniform_filter(gray_result, size=5)
-            dark_mask = (gray_result < local_mean * 0.3) & (gray_result < 0.1)
-            
-            # Dilata leggermente la mask per catturare bordi
-            dark_mask = ndimage.binary_dilation(dark_mask, iterations=1)
-            
-            # Per ogni canale, correggi le regioni scure
-            corrected = result.copy()
-            for c in range(result.shape[2] if len(result.shape) == 3 else 1):
-                if len(result.shape) == 3:
-                    channel = result[:, :, c]
-                    orig_channel = original[:, :, c]
-                else:
-                    channel = result
-                    orig_channel = original
-                
-                # Smooth interpolation nelle regioni scure
-                smoothed = ndimage.gaussian_filter(channel, sigma=2.0)
-                
-                # Blend con l'originale nelle regioni problematiche
-                blend_factor = 0.3  # Mantieni un po' dell'effetto originale
-                corrected_channel = np.where(
-                    dark_mask,
-                    blend_factor * orig_channel + (1 - blend_factor) * smoothed,
-                    channel
-                )
-                
-                if len(result.shape) == 3:
-                    corrected[:, :, c] = corrected_channel
-                else:
-                    corrected = corrected_channel
-            
-            # 2. Leggero sharpening per recuperare dettagli
-            kernel = np.array([[-0.1, -0.1, -0.1],
-                              [-0.1,  1.8, -0.1],
-                              [-0.1, -0.1, -0.1]])
-            
-            if len(corrected.shape) == 3:
-                for c in range(corrected.shape[2]):
-                    corrected[:, :, c] = ndimage.convolve(corrected[:, :, c], kernel)
-            else:
-                corrected = ndimage.convolve(corrected, kernel)
-            
-            # Clamp values
-            corrected = np.clip(corrected, 0, 1)
-            
-            return corrected
-            
-        except Exception as e:
-            print(f"Warning: Post-processing failed: {e}")
-            return result
     
     def save_result(self, original_path, processed_img):
         """Salva il risultato"""
