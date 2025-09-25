@@ -389,7 +389,7 @@ def get_default_config():
         
         # Training
         'num_epochs': 300,
-        'batch_size': 20,  # Ottimizzato per RTX 5090 con tile 512x512
+        'batch_size': 8,  # Ottimizzato per RTX 5090 con mixed precision completo
         'learning_rate': 2e-4,
         'weight_decay': 1e-4,
         'optimizer': 'adamw',

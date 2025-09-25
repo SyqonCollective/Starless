@@ -35,7 +35,7 @@ log_error() {
 }
 
 # Default parameters
-BATCH_SIZE=20
+BATCH_SIZE=8
 EPOCHS=300
 LR=2e-4
 MODEL_SIZE="base"

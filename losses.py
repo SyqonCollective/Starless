@@ -41,9 +41,9 @@ class EdgeLoss(nn.Module):
             pred_gray = pred
             target_gray = target
         
-        # Assicurati che i kernel Sobel siano dello stesso tipo dei tensori input
-        sobel_x = self.sobel_x.to(pred_gray.dtype)
-        sobel_y = self.sobel_y.to(pred_gray.dtype)
+        # Assicurati che i kernel Sobel siano dello stesso tipo dei tensori input (fix mixed precision)
+        sobel_x = self.sobel_x.to(pred_gray.dtype).to(pred_gray.device)
+        sobel_y = self.sobel_y.to(pred_gray.dtype).to(pred_gray.device)
         
         # Calcola gradienti
         pred_edge_x = F.conv2d(pred_gray, sobel_x, padding=1)

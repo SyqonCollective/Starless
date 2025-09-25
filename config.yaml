@@ -16,7 +16,7 @@ model:
 # ============================================================================
 training:
   num_epochs: 300
-  batch_size: 20  # Ottimizzato per RTX 5090 con tile 512x512 pre-processati
+  batch_size: 8  # Ottimizzato per RTX 5090 con mixed precision e modello completo
   learning_rate: 2e-4
   weight_decay: 1e-4
   
