@@ -357,8 +357,6 @@ def main():
     
     # Configuration ultra-stabile
     config = {
-        'train_dir': '/workspace/train_tiles',
-        'val_dir': '/workspace/val_tiles', 
         'batch_size': 4,  # Molto ridotto per stabilità
         'num_workers': 2,  # Ridotto
         'epochs': 100,
@@ -373,8 +371,7 @@ def main():
     
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(
-        train_dir=config['train_dir'],
-        val_dir=config['val_dir'],
+        root_dir='/workspace',  # Root directory contenente train_tiles e val_tiles
         batch_size=config['batch_size'],
         num_workers=config['num_workers'],
         pin_memory=True
