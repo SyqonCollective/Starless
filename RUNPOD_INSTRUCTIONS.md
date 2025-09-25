@@ -69,7 +69,7 @@ python -c "
 from dataset import create_dataloaders
 train_loader, val_loader = create_dataloaders('/workspace', batch_size=4, num_workers=2)
 batch = next(iter(train_loader))
-print(f'Dataset OK: Input {batch[0].shape}, Target {batch[1].shape}')
+print(f'Dataset OK: Input {batch[\"input\"].shape}, Target {batch[\"target\"].shape}')
 "
 
 # Test loss

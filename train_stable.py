@@ -136,9 +136,9 @@ class UltraStableTrainer:
         
         pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}')
         
-        for batch_idx, (inputs, targets) in enumerate(pbar):
-            inputs = inputs.to(self.device, non_blocking=True)
-            targets = targets.to(self.device, non_blocking=True)
+        for batch_idx, batch in enumerate(pbar):
+            inputs = batch['input'].to(self.device, non_blocking=True)
+            targets = batch['target'].to(self.device, non_blocking=True)
             
             # Verifica input
             if torch.isnan(inputs).any() or torch.isnan(targets).any():
@@ -238,9 +238,9 @@ class UltraStableTrainer:
         with torch.no_grad():
             pbar = tqdm(val_loader, desc=f'Validation {epoch+1}')
             
-            for batch_idx, (inputs, targets) in enumerate(pbar):
-                inputs = inputs.to(self.device, non_blocking=True)
-                targets = targets.to(self.device, non_blocking=True)
+            for batch_idx, batch in enumerate(pbar):
+                inputs = batch['input'].to(self.device, non_blocking=True)
+                targets = batch['target'].to(self.device, non_blocking=True)
                 
                 # Verifica input
                 if torch.isnan(inputs).any() or torch.isnan(targets).any():
