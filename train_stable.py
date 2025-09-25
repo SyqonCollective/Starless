@@ -65,12 +65,12 @@ class UltraStableTrainer:
         
         # Setup model
         self.model = create_astro_model(
-            in_channels=3,
-            out_channels=3,
+            size='small',  # Usa configurazione predefinita
+            img_channel=3,
             width=32,  # Ridotto per stabilità
-            middle_block_num=2,  # Ridotto 
-            encoder_block_nums=[1, 1, 1, 28],  # Ridotto
-            decoder_block_nums=[1, 1, 1, 1]   # Molto ridotto
+            middle_blk_num=2,  # Ridotto 
+            enc_blk_nums=[1, 1, 1, 28],  # Ridotto
+            dec_blk_nums=[1, 1, 1, 1]   # Molto ridotto
         ).to(self.device)
         
         # Loss function stabile

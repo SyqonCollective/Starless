@@ -58,7 +58,7 @@ nvidia-smi -l 1
 python -c "
 from model import create_astro_model
 import torch
-model = create_astro_model(in_channels=3, out_channels=3, width=32, middle_block_num=2, encoder_block_nums=[1,1,1,28], decoder_block_nums=[1,1,1,1])
+model = create_astro_model(size='small', img_channel=3, width=32, middle_blk_num=2, enc_blk_nums=[1,1,1,28], dec_blk_nums=[1,1,1,1])
 x = torch.randn(1, 3, 512, 512, device='cuda')
 y = model.to('cuda')(x)
 print(f'Model OK: {x.shape} -> {y.shape}')

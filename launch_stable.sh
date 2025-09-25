@@ -103,12 +103,12 @@ from model import create_astro_model
 
 try:
     model = create_astro_model(
-        in_channels=3,
-        out_channels=3, 
+        size='small',
+        img_channel=3,
         width=32,
-        middle_block_num=2,
-        encoder_block_nums=[1, 1, 1, 28],
-        decoder_block_nums=[1, 1, 1, 1]
+        middle_blk_num=2,
+        enc_blk_nums=[1, 1, 1, 28],
+        dec_blk_nums=[1, 1, 1, 1]
     )
     
     # Test forward pass
