@@ -278,14 +278,15 @@ class AdaptiveLoss(nn.Module):
 def create_loss_function(loss_config: Optional[Dict] = None, device='cuda'):
     """Factory function per creare loss function"""
     
+        # Configurazione loss molto più conservativa per stabilità
     default_config = {
         'l1_weight': 1.0,
-        'charbonnier_weight': 1.0,
-        'ssim_weight': 0.5,
-        'edge_weight': 0.3,
-        'freq_weight': 0.2,
-        'perceptual_weight': 0.5,
-        'star_preservation_weight': 2.0,
+        'charbonnier_weight': 0.5,  # Ridotto per stabilità
+        'ssim_weight': 0.1,         # Molto ridotto
+        'edge_weight': 0.0,         # Disabilitato - problematico con mixed precision
+        'freq_weight': 0.0,         # Disabilitato - può causare instabilità  
+        'perceptual_weight': 0.0,   # Disabilitato - VGG può causare NaN
+        'star_preservation_weight': 0.5,  # Ridotto drasticamente
     }
     
     if loss_config:
