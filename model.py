@@ -238,11 +238,12 @@ class NAFNet(nn.Module):
         return x[:, :, :H, :W]
 
     def check_image_size(self, x):
-        """Padding per garantire che le dimensioni siano multiple di padder_size"""
+        """Padding riflessivo per garantire dimensioni multiple di padder_size"""
         _, _, h, w = x.size()
         mod_pad_h = (self.padder_size - h % self.padder_size) % self.padder_size
         mod_pad_w = (self.padder_size - w % self.padder_size) % self.padder_size
-        x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h))
+        # Usa padding riflessivo invece di zero per evitare bordi artificiosi
+        x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), mode='reflect')
         return x
 
 
@@ -282,51 +283,77 @@ class NAFNetLocal(NAFNet):
         # Durante l'inferenza può gestire immagini più grandi
         return self.forward_chop(inp)
 
-    def forward_chop(self, inp, shave=10, min_size=160000):
-        """
-        Forward con chunking per immagini grandi
-        Utile per inferenza su immagini astrofotografiche ad alta risoluzione
-        """
-        scale = 1
-        n_GPUs = 1
-        b, c, h, w = inp.size()
-        h_half, w_half = h // 2, w // 2
-        h_size, w_size = h_half + shave, w_half + shave
-        lr_list = [
-            inp[:, :, 0:h_size, 0:w_size],
-            inp[:, :, 0:h_size, (w - w_size):w],
-            inp[:, :, (h - h_size):h, 0:w_size],
-            inp[:, :, (h - h_size):h, (w - w_size):w]
-        ]
+    def _hann2d(self, h, w, device):
+        """Crea finestra Hann 2D per blending smooth"""
+        wy = torch.hann_window(h, periodic=False, device=device).unsqueeze(1)
+        wx = torch.hann_window(w, periodic=False, device=device).unsqueeze(0)
+        return (wy @ wx).clamp_min(1e-6)  # evita divisioni per ~0
 
-        if w_size * h_size < min_size:
-            sr_list = []
-            for i in range(0, 4, n_GPUs):
-                lr_batch = torch.cat(lr_list[i:(i + n_GPUs)], dim=0)
-                sr_batch = super().forward(lr_batch)
-                sr_list.extend(sr_batch.chunk(n_GPUs, dim=0))
+    @torch.no_grad()
+    def forward_chop(self, inp, tile=512, overlap=64):
+        """
+        Sliding-window con blending per immagini grandi.
+        RISOLVE I QUADRETTINI NERI con smooth blending!
+        
+        Args:
+            inp: input tensor [B, C, H, W]
+            tile: dimensione della finestra (512 default)
+            overlap: sovrapposizione per blending (64 default, molto sicuro)
+        """
+        self.eval()
+        b, c, H, W = inp.shape
+        device = inp.device
+
+        out = torch.zeros_like(inp)
+        norm = torch.zeros_like(inp)  # somma dei pesi per normalizzare
+
+        step = tile - overlap
+        
+        # Pad riflessivo per coprire i bordi senza introdurre bande
+        pad_h = (step - (H - tile) % step) % step if H > tile else 0
+        pad_w = (step - (W - tile) % step) % step if W > tile else 0
+        
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(inp, (0, pad_w, 0, pad_h), mode='reflect')
         else:
-            sr_list = [
-                self.forward_chop(patch, shave=shave, min_size=min_size)
-                for patch in lr_list
-            ]
+            x = inp
 
-        h, w = scale * h, scale * w
-        h_half, w_half = scale * h_half, scale * w_half
-        h_size, w_size = scale * h_size, scale * w_size
-        shave *= scale
+        _, _, Hp, Wp = x.shape
+        
+        # Finestra Hann per blending smooth
+        window = self._hann2d(tile, tile, device).view(1, 1, tile, tile)
 
-        output = inp.new(b, c, h, w)
-        output[:, :, 0:h_half, 0:w_half] \
-            = sr_list[0][:, :, 0:h_half, 0:w_half]
-        output[:, :, 0:h_half, w_half:w] \
-            = sr_list[1][:, :, 0:h_half, (w_size - w + w_half):w_size]
-        output[:, :, h_half:h, 0:w_half] \
-            = sr_list[2][:, :, (h_size - h + h_half):h_size, 0:w_half]
-        output[:, :, h_half:h, w_half:w] \
-            = sr_list[3][:, :, (h_size - h + h_half):h_size, (w_size - w + w_half):w_size]
+        # Sliding window con overlap
+        for y in range(0, max(1, Hp - tile + 1), step):
+            y_end = min(y + tile, Hp)
+            y = max(0, y_end - tile)  # Aggiusta per bordi
+            
+            for x_pos in range(0, max(1, Wp - tile + 1), step):
+                x_end = min(x_pos + tile, Wp)
+                x_pos = max(0, x_end - tile)  # Aggiusta per bordi
+                
+                # Estrai patch
+                patch = x[:, :, y:y+tile, x_pos:x_pos+tile]
+                
+                # Forward pass standard del modello
+                pred = super(NAFNetLocal, self).forward(patch)
+                
+                # Accumula con blending window
+                current_window = window
+                if pred.shape[-2:] != (tile, tile):
+                    # Aggiusta window per patch ai bordi
+                    h_patch, w_patch = pred.shape[-2:]
+                    current_window = self._hann2d(h_patch, w_patch, device).view(1, 1, h_patch, w_patch)
+                
+                out[:, :, y:y+pred.shape[-2], x_pos:x_pos+pred.shape[-1]] += pred * current_window
+                norm[:, :, y:y+pred.shape[-2], x_pos:x_pos+pred.shape[-1]] += current_window
 
-        return output
+        # Normalizzazione finale
+        out = out / norm.clamp_min(1e-6)
+        
+        # Rimuovi il padding e ritorna alla dimensione originale
+        out = out[:, :, :H, :W]
+        return out
 
 
 def create_model(model_type='nafnet', **kwargs):

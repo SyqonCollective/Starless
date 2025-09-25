@@ -28,14 +28,27 @@ class StarRemovalGUI:
         
         # Variabili
         self.model = None
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # Metal acceleration for M1 Pro
+        if torch.backends.mps.is_available():
+            self.device = torch.device('mps')
+        elif torch.cuda.is_available():
+            self.device = torch.device('cuda')
+        else:
+            self.device = torch.device('cpu')
+        
         self.checkpoint_path = tk.StringVar()
         self.image_path = tk.StringVar()
         self.tile_size = tk.IntVar(value=512)
-        self.overlap = tk.IntVar(value=64)
+        self.overlap = tk.IntVar(value=96)
         self.processing = False
         
         self.setup_gui()
+        self.show_device_info()
+        
+    def show_device_info(self):
+        """Show device information at startup"""
+        device_name = "Metal (M1 Pro)" if self.device.type == 'mps' else str(self.device).upper()
+        print(f"🚀 Using device: {device_name}")
         
     def setup_gui(self):
         """Setup interfaccia GUI"""
@@ -78,24 +91,43 @@ class StarRemovalGUI:
         tile_combo.grid(row=0, column=1, padx=(10, 20))
         
         ttk.Label(params_frame, text="Overlap:").grid(row=0, column=2, sticky=tk.W)
-        overlap_combo = ttk.Combobox(params_frame, textvariable=self.overlap, values=[32, 64, 128], width=10)
+        overlap_combo = ttk.Combobox(params_frame, textvariable=self.overlap, values=[32, 64, 96, 128], width=10)
         overlap_combo.grid(row=0, column=3, padx=(10, 20))
+        overlap_combo.set(96)  # Default overlap più alto per astrofotografia
         
         # Process button
         self.process_btn = ttk.Button(params_frame, text="🚀 Process Image", command=self.process_image)
         self.process_btn.grid(row=0, column=4, padx=(20, 0))
         
-        # Progress bar
-        self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
-        self.progress.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
+        # Progress bars
+        progress_frame = ttk.Frame(main_frame)
+        progress_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
         
-        # Status label
-        self.status_label = ttk.Label(main_frame, text="Ready", foreground="green")
-        self.status_label.grid(row=5, column=0, columnspan=3, pady=(10, 0))
+        ttk.Label(progress_frame, text="Overall Progress:").grid(row=0, column=0, sticky=tk.W)
+        self.progress = ttk.Progressbar(progress_frame, mode='determinate')
+        self.progress.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(10, 0))
+        
+        ttk.Label(progress_frame, text="Tiles Progress:").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        self.tile_progress = ttk.Progressbar(progress_frame, mode='determinate')
+        self.tile_progress.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=(5, 0))
+        
+        progress_frame.columnconfigure(1, weight=1)
+        
+        # Status labels
+        status_frame = ttk.Frame(main_frame)
+        status_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
+        
+        self.status_label = ttk.Label(status_frame, text="Ready", foreground="green")
+        self.status_label.grid(row=0, column=0, sticky=tk.W)
+        
+        self.tile_status_label = ttk.Label(status_frame, text="", foreground="blue")
+        self.tile_status_label.grid(row=0, column=1, sticky=tk.E)
+        
+        status_frame.columnconfigure(1, weight=1)
         
         # Preview frame
         preview_frame = ttk.LabelFrame(main_frame, text="Image Preview", padding="10")
-        preview_frame.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
+        preview_frame.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
         
         # Canvas for image preview
         self.canvas = tk.Canvas(preview_frame, width=800, height=400, bg='black')
@@ -111,7 +143,7 @@ class StarRemovalGUI:
         
         # Configure grid weights
         main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(6, weight=1)
+        main_frame.rowconfigure(7, weight=1)
         preview_frame.columnconfigure(0, weight=1)
         preview_frame.rowconfigure(0, weight=1)
         
@@ -194,7 +226,8 @@ class StarRemovalGUI:
             
             # Update status
             params = sum(p.numel() for p in self.model.parameters())
-            self.model_status.config(text=f"✅ Model loaded: {params:,} parameters", foreground="green")
+            device_name = "Metal (M1 Pro)" if self.device.type == 'mps' else str(self.device).upper()
+            self.model_status.config(text=f"✅ Model loaded: {params:,} parameters on {device_name}", foreground="green")
             self.status_label.config(text="Model loaded successfully", foreground="green")
             
         except Exception as e:
@@ -226,7 +259,8 @@ class StarRemovalGUI:
         try:
             self.processing = True
             self.process_btn.config(state='disabled')
-            self.progress.start(10)
+            self.progress.config(mode='determinate')
+            self.tile_progress.config(mode='determinate')
             
             # Update status
             self.status_label.config(text="Processing image...", foreground="orange")
@@ -261,7 +295,9 @@ class StarRemovalGUI:
         finally:
             self.processing = False
             self.process_btn.config(state='normal')
-            self.progress.stop()
+            self.progress.config(value=0)
+            self.tile_progress.config(value=0)
+            self.tile_status_label.config(text="")
     
     def load_image_for_inference(self, image_path):
         """Carica immagine per inferenza"""
@@ -315,14 +351,23 @@ class StarRemovalGUI:
         total_tiles = n_tiles_h * n_tiles_w
         current_tile = 0
         
+        # Setup progress bars
+        self.progress.config(maximum=100)
+        self.tile_progress.config(maximum=total_tiles)
+        
         with torch.no_grad():
             for i in range(n_tiles_h):
                 for j in range(n_tiles_w):
                     current_tile += 1
                     
-                    # Update progress
-                    progress_text = f"Processing tile {current_tile}/{total_tiles}"
-                    self.status_label.config(text=progress_text, foreground="orange")
+                    # Update progress bars
+                    tile_progress = (current_tile / total_tiles) * 100
+                    self.progress.config(value=tile_progress)
+                    self.tile_progress.config(value=current_tile)
+                    
+                    # Update status labels
+                    self.status_label.config(text=f"Processing tiles... {tile_progress:.1f}%", foreground="orange")
+                    self.tile_status_label.config(text=f"Tile {current_tile}/{total_tiles}")
                     self.root.update()
                     
                     # Extract tile
@@ -337,25 +382,49 @@ class StarRemovalGUI:
                     tile_tensor = torch.from_numpy(tile).permute(2, 0, 1).unsqueeze(0).to(self.device)
                     tile_tensor = (tile_tensor - 0.5) / 0.5  # Normalize [-1, 1]
                     
-                    # Inference
-                    with torch.cuda.amp.autocast():
+                    # Inference with proper device acceleration
+                    if self.device.type == 'cuda':
+                        with torch.cuda.amp.autocast():
+                            output = self.model(tile_tensor)
+                    else:
+                        # For MPS (Metal) and CPU
                         output = self.model(tile_tensor)
                     
                     # Postprocess
                     output = (output * 0.5 + 0.5).clamp(0, 1)  # Denormalize
                     processed_tile = output.squeeze(0).permute(1, 2, 0).cpu().numpy()
                     
-                    # Weight for blending (higher weight in center)
+                    # Advanced weight for smooth blending (Gaussian-like)
                     weight = np.ones((tile_size, tile_size))
                     if overlap > 0:
-                        # Create smooth weight mask
-                        fade = overlap // 2
-                        for k in range(fade):
-                            alpha = k / fade
-                            weight[k, :] *= alpha
-                            weight[-k-1, :] *= alpha
-                            weight[:, k] *= alpha
-                            weight[:, -k-1] *= alpha
+                        # Create smooth Gaussian-like weight mask
+                        fade = overlap
+                        
+                        # Create 1D weight profile (smooth falloff)
+                        x = np.linspace(0, 1, fade)
+                        smooth_profile = 0.5 * (1 + np.cos(np.pi * x))  # Cosine falloff
+                        
+                        # Apply to edges
+                        if fade > 0:
+                            # Top edge
+                            for k in range(fade):
+                                if k < len(smooth_profile):
+                                    weight[k, :] *= smooth_profile[k]
+                            
+                            # Bottom edge
+                            for k in range(fade):
+                                if k < len(smooth_profile):
+                                    weight[-(k+1), :] *= smooth_profile[k]
+                            
+                            # Left edge  
+                            for k in range(fade):
+                                if k < len(smooth_profile):
+                                    weight[:, k] *= smooth_profile[k]
+                            
+                            # Right edge
+                            for k in range(fade):
+                                if k < len(smooth_profile):
+                                    weight[:, -(k+1)] *= smooth_profile[k]
                     
                     # Add to result
                     result[y1:y2, x1:x2] += processed_tile * weight[:, :, np.newaxis]
@@ -368,7 +437,82 @@ class StarRemovalGUI:
         # Crop to original size
         result = result[:h, :w]
         
+        # Post-processing per rimuovere artifacts
+        result = self.post_process_result(result, image)
+        
         return result
+    
+    def post_process_result(self, result, original):
+        """Post-processing per correggere artifacts e migliorare texture"""
+        try:
+            # Ensure same shape
+            if result.shape != original.shape:
+                return result
+            
+            # 1. Correzione valori estremi (quadrettini neri)
+            # Identifica pixel troppo scuri rispetto al vicinato
+            from scipy import ndimage
+            
+            # Convert to grayscale for analysis
+            if len(result.shape) == 3:
+                gray_result = np.mean(result, axis=2)
+                gray_original = np.mean(original, axis=2)
+            else:
+                gray_result = result
+                gray_original = original
+            
+            # Trova regioni troppo scure (possibili artifacts)
+            local_mean = ndimage.uniform_filter(gray_result, size=5)
+            dark_mask = (gray_result < local_mean * 0.3) & (gray_result < 0.1)
+            
+            # Dilata leggermente la mask per catturare bordi
+            dark_mask = ndimage.binary_dilation(dark_mask, iterations=1)
+            
+            # Per ogni canale, correggi le regioni scure
+            corrected = result.copy()
+            for c in range(result.shape[2] if len(result.shape) == 3 else 1):
+                if len(result.shape) == 3:
+                    channel = result[:, :, c]
+                    orig_channel = original[:, :, c]
+                else:
+                    channel = result
+                    orig_channel = original
+                
+                # Smooth interpolation nelle regioni scure
+                smoothed = ndimage.gaussian_filter(channel, sigma=2.0)
+                
+                # Blend con l'originale nelle regioni problematiche
+                blend_factor = 0.3  # Mantieni un po' dell'effetto originale
+                corrected_channel = np.where(
+                    dark_mask,
+                    blend_factor * orig_channel + (1 - blend_factor) * smoothed,
+                    channel
+                )
+                
+                if len(result.shape) == 3:
+                    corrected[:, :, c] = corrected_channel
+                else:
+                    corrected = corrected_channel
+            
+            # 2. Leggero sharpening per recuperare dettagli
+            kernel = np.array([[-0.1, -0.1, -0.1],
+                              [-0.1,  1.8, -0.1],
+                              [-0.1, -0.1, -0.1]])
+            
+            if len(corrected.shape) == 3:
+                for c in range(corrected.shape[2]):
+                    corrected[:, :, c] = ndimage.convolve(corrected[:, :, c], kernel)
+            else:
+                corrected = ndimage.convolve(corrected, kernel)
+            
+            # Clamp values
+            corrected = np.clip(corrected, 0, 1)
+            
+            return corrected
+            
+        except Exception as e:
+            print(f"Warning: Post-processing failed: {e}")
+            return result
     
     def save_result(self, original_path, processed_img):
         """Salva il risultato"""
