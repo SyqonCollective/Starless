@@ -1,0 +1,165 @@
+# Configurazione per training NAFNet - Astrofotografia
+# Ottimizzata per RTX 5090
+
+# ============================================================================
+# CONFIGURAZIONE MODELLO
+# ============================================================================
+model:
+  size: "base"  # small, base, large
+  type: "nafnet"  # nafnet, nafnet_local
+  img_channels: 3
+  drop_path_rate: 0.1
+  drop_out_rate: 0.0
+
+# ============================================================================
+# CONFIGURAZIONE TRAINING
+# ============================================================================
+training:
+  num_epochs: 300
+  batch_size: 20  # Ottimizzato per RTX 5090 con tile 512x512 pre-processati
+  learning_rate: 2e-4
+  weight_decay: 1e-4
+  
+  # Ottimizzatore
+  optimizer: "adamw"  # adamw, adam
+  
+  # Scheduler
+  scheduler: "cosine"  # cosine, step, reduce_on_plateau
+  scheduler_params:
+    # Per cosine
+    T_max: 300
+    eta_min: 2e-6
+    # Per step
+    step_size: 100
+    gamma: 0.5
+    # Per plateau
+    patience: 15
+    factor: 0.5
+  
+  # Regularizzazione
+  grad_clip: 1.0
+  use_amp: true  # Mixed precision per RTX 5090
+
+# ============================================================================
+# CONFIGURAZIONE LOSS FUNCTION
+# ============================================================================
+loss:
+  # Pesi delle diverse componenti di loss
+  l1_weight: 1.0
+  charbonnier_weight: 1.0
+  ssim_weight: 0.5
+  edge_weight: 0.3
+  freq_weight: 0.2
+  perceptual_weight: 0.5
+  star_preservation_weight: 2.0
+  
+  # Loss adattiva (cambia pesi durante training)
+  adaptive_loss: true
+
+# ============================================================================
+# CONFIGURAZIONE DATASET
+# ============================================================================
+dataset:
+  data_root: "."
+  image_size: 512  # Tile già 512x512 - no resize necessario
+  num_workers: 8   # Ottimale per RTX 5090
+  pin_memory: true
+  
+  # Augmentazioni specifiche per astrofotografia
+  augmentation:
+    horizontal_flip: 0.5
+    vertical_flip: 0.5
+    random_rotate90: 0.5
+    rotate_limit: 15
+    brightness_contrast: 0.3
+    brightness_limit: 0.1
+    contrast_limit: 0.1
+    gaussian_noise: 0.2
+    noise_var_limit: [10.0, 30.0]
+
+# ============================================================================
+# CONFIGURAZIONE LOGGING E SALVATAGGIO
+# ============================================================================
+logging:
+  log_dir: "./logs"
+  checkpoint_dir: "./checkpoints"
+  
+  # Frequenze di logging
+  log_freq: 50      # Log ogni N batch
+  save_freq: 10     # Salva checkpoint ogni N epoche
+  save_img_freq: 5  # Salva immagini sample ogni N epoche
+  
+  # Checkpoint management
+  keep_last_checkpoints: 5
+  save_best_only: false
+
+# ============================================================================
+# CONFIGURAZIONE VALIDAZIONE
+# ============================================================================
+validation:
+  validate_every: 1  # Valida ogni N epoche
+  save_val_images: true
+  num_val_samples: 8  # Numero di sample da salvare
+
+# ============================================================================
+# CONFIGURAZIONE HARDWARE RTX 5090
+# ============================================================================
+hardware:
+  # Ottimizzazioni specifiche per RTX 5090
+  use_tf32: true           # Abilita TF32 per Ampere/Ada
+  use_cudnn_benchmark: true # Ottimizza cuDNN
+  use_channels_last: false  # Memory layout (può aiutare)
+  
+  # Memory management
+  empty_cache_freq: 100    # Svuota cache GPU ogni N batch
+  max_grad_norm: null      # Norm clipping (null = disabled)
+
+# ============================================================================
+# CONFIGURAZIONE RESUME/PRETRAINING
+# ============================================================================
+resume:
+  checkpoint_path: null    # Path per riprendere training
+  pretrained_path: null    # Path a pesi pre-addestrati
+  load_optimizer: true     # Carica stato optimizer
+  load_scheduler: true     # Carica stato scheduler
+
+# ============================================================================
+# CONFIGURAZIONE SPERIMENTALE
+# ============================================================================
+experimental:
+  # Tecniche avanzate (sperimentali)
+  use_ema: false          # Exponential Moving Average
+  ema_decay: 0.999        # Decay per EMA
+  
+  # Gradient accumulation per batch size effettivi più grandi
+  gradient_accumulation_steps: 1
+  
+  # Label smoothing
+  label_smoothing: 0.0
+  
+  # Stochastic Weight Averaging
+  use_swa: false
+  swa_start_epoch: 200
+  swa_lr: 1e-5
+
+# ============================================================================
+# CONFIGURAZIONE PROFILING E DEBUG
+# ============================================================================
+debug:
+  profile_training: false   # Profiling delle performance
+  check_gradients: false    # Check gradienti per NaN/Inf
+  visualize_samples: true   # Visualizza sample durante training
+  save_model_graph: false   # Salva grafo del modello
+  
+  # Memory profiling
+  memory_profiling: false
+  memory_snapshot_freq: 100
+
+# ============================================================================
+# CONFIG PATHS (impostati automaticamente)
+# ============================================================================
+paths:
+  train_input: "train_tiles/input"
+  train_target: "train_tiles/target"  
+  val_input: "val_tiles/input"
+  val_target: "val_tiles/target"
