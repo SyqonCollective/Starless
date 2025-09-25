@@ -10,16 +10,21 @@ import glob
 
 def find_latest_checkpoint():
     """Trova il checkpoint più recente"""
-    checkpoints_dir = "checkpoints"
-    if not os.path.exists(checkpoints_dir):
-        print(f"❌ Directory {checkpoints_dir} not found")
-        return None
+    # Cerca nelle directory possibili
+    possible_dirs = ["checkpoints/professional", "checkpoints", "./checkpoints/professional"]
     
-    # Cerca checkpoint files
-    checkpoint_files = glob.glob(os.path.join(checkpoints_dir, "checkpoint_epoch_*.pth"))
-    if not checkpoint_files:
-        print(f"❌ No checkpoint files found in {checkpoints_dir}")
-        return None
+    for checkpoints_dir in possible_dirs:
+        if os.path.exists(checkpoints_dir):
+            # Cerca checkpoint files
+            checkpoint_files = glob.glob(os.path.join(checkpoints_dir, "checkpoint_epoch_*.pth"))
+            if checkpoint_files:
+                # Trova il più recente
+                latest = max(checkpoint_files, key=os.path.getctime)
+                print(f"📂 Latest checkpoint found: {latest}")
+                return latest
+    
+    print(f"❌ No checkpoint files found in any directory")
+    return None
     
     # Trova il più recente
     latest = max(checkpoint_files, key=os.path.getctime)
